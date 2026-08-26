@@ -17,21 +17,29 @@ export async function fetchLiveCalendar(force = false) {
   try {
     const now2 = new Date()
     const weekStart = new Date(now2)
-    weekStart.setDate(now2.getDate() - now2.getDay()) // This week's Sunday
+    weekStart.setDate(now2.getDate() - now2.getDay()) // Sunday
+    weekStart.setHours(0, 0, 0, 0)
     const weekEnd = new Date(weekStart)
     weekEnd.setDate(weekStart.getDate() + 6)
+    weekEnd.setHours(23, 59, 59, 999)
 
     // Try proxied endpoint first (dev), fallback to direct
+    // Validate response is actual XML (not an HTML rate-limit/error page)
     let xmlText = ''
     try {
       const res = await fetch('/api/calendar')
-      if (res.ok) xmlText = await res.text()
+      if (res.ok) {
+        const text = await res.text()
+        if (text.includes('<weeklyevents') || text.includes('<?xml')) xmlText = text
+      }
     } catch { /* ignore, try direct */ }
 
     if (!xmlText) {
       const res = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.xml')
       if (!res.ok) throw new Error('ForexFactory feed failed')
-      xmlText = await res.text()
+      const text = await res.text()
+      if (text.includes('<weeklyevents') || text.includes('<?xml')) xmlText = text
+      else throw new Error('ForexFactory returned non-XML response')
     }
 
     const events = parseForexFactoryXML(xmlText, weekStart, weekEnd)
