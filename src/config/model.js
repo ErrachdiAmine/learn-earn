@@ -3,7 +3,7 @@
 export const modelConfig = {
   default: {
     provider: 'omniroute',
-    model: 'acard',
+    model: 'Alucard',
     baseUrl: import.meta.env.VITE_NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1',
     apiKey: import.meta.env.VITE_NVIDIA_API_KEY || ''
   },
