@@ -148,8 +148,8 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     ? `${config.baseUrl}/chat/completions` 
     : '/api/ai'
 
-  // Production speed optimization: cap max output tokens to 350 for lightning response times
-  const effectiveTokens = isProd ? Math.min(max_tokens, 350) : max_tokens
+  // Ample token budget so responses are concise yet never cut off mid-sentence
+  const effectiveTokens = isProd ? Math.min(max_tokens, 1000) : max_tokens
 
   async function makeCall(msgs, tokens) {
     const headers = { 'Content-Type': 'application/json' }
@@ -204,18 +204,18 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
   ]
   let full = await makeCall(msgs, effectiveTokens)
 
-  // In production, disable multi-step continuation calls to ensure fast 1-step responses
-  const needsContinue = !isProd && full.length > 100 && !/[.!?]\s*$/.test(full.trim()) && !full.includes('[DONE]')
+  // Rescue incomplete responses that were cut mid-sentence without terminal punctuation
+  const needsContinue = full.length > 100 && !/[.!?؛:\n]\s*$/.test(full.trim()) && !full.includes('[DONE]')
   if (needsContinue) {
     try {
       const contMsgs = [
-        { role: 'system', content: getSystemPrompt(lang, false) },
+        { role: 'system', content: getSystemPrompt(lang, isProd) },
         { role: 'user', content: prompt },
         { role: 'assistant', content: full },
-        { role: 'user', content: lang === 'ar' ? 'أكمل الإجابة من حيث توقفت بدون تكرار.' : 'Continue from where you left off without repeating.' }
+        { role: 'user', content: lang === 'ar' ? 'أكمل الجملة الأخيرة بشكل نظيف دون تكرار.' : 'Complete the final sentence cleanly without repeating.' }
       ]
-      const more = await makeCall(contMsgs, 1024)
-      if (more) full += '\n\n' + more
+      const more = await makeCall(contMsgs, 300)
+      if (more) full += (full.endsWith(' ') ? '' : ' ') + more
     } catch { /* ignore continuation failures */ }
   }
 
@@ -228,16 +228,18 @@ Provide concise, direct, high-impact financial analysis.
 
 RULES:
 1. Concise & Direct: Be extremely brief and get straight to the point. No intro, recap, or conversational filler.
-2. Free Format: Structure your response freely using whatever format fits best (clean bullet points, quick lists, or short paragraphs). Do NOT follow any rigid markdown template.
-3. Concrete Details: When relevant, state exact software (TradingView, MetaTrader 5), specific financial assets (EUR/USD, USD/JPY, Gold XAU/USD, S&P 500), and numeric pip expectations (e.g. 30-50 pips).`
+2. Free Format: Structure your response freely using whatever format fits best (clean bullet points, quick lists, or short paragraphs). Do NOT follow any rigid markdown template. Avoid huge multi-row tables.
+3. Concrete Details: When relevant, state exact software (TradingView, MetaTrader 5), specific financial assets (EUR/USD, USD/JPY, Gold XAU/USD, S&P 500), and numeric pip expectations (e.g. 30-50 pips).
+4. Complete Thought: Keep your output concise, but ALWAYS finish your full thought and end cleanly with ending punctuation. Never stop mid-sentence or mid-word.`
 
 const PROD_SYSTEM_PROMPT_AR = `أنت MarketScope — خبير اقتصادي كلي ومحلل أسواق تداول.
 قدّم تحليلاً موجزاً، مباشراً، وعالي الأثر.
 
 القواعد:
 1. موجز ومباشر: كن مختصراً وادخل في صلب الموضوع مباشرة دون مقدمات أو حشو.
-2. حرية التنسيق: نسّق إجابتك بحرية بالطريقة الأنسب (نقاط سريعة، قوائم، أو فقرات قصيرة) دون الالتزام بقالب محدد.
-3. تفاصيل صريحة: اذكر دائماً منصات صريحة (TradingView, MetaTrader 5) وأزواجاً محددة (EUR/USD, USD/JPY, XAU/USD الذهب) مع نقاط تذبذب متوقعة عند الحاجة.`
+2. حرية التنسيق: نسّق إجابتك بحرية بالطريقة الأنسب (نقاط سريعة، قوائم، أو فقرات قصيرة) دون الالتزام بقالب محدد. تجنب الجداول الطويلة والمعقدة.
+3. تفاصيل صريحة: اذكر دائماً منصات صريحة (TradingView, MetaTrader 5) وأزواجاً محددة (EUR/USD, USD/JPY, XAU/USD الذهب) مع نقاط تذبذب متوقعة عند الحاجة.
+4. إكمال الفكرة: اجعل إجابتك موجزة، ولكن أنهِ فكرتك دائماً بشكل كامل ونظيف مع نقطة في النهاية. يُمنع التوقف في منتصف الجملة.`
 
 /* Detailed local system prompts */
 const SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst and active trader mentor.
