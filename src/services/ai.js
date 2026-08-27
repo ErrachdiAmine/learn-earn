@@ -138,14 +138,18 @@ export const DEFAULT_CALENDAR = [
 
 import { getModelConfig } from '../config/model'
 
-/* ---------- AI CALL (streaming SSE parsing) ---------- */
+/* ---------- AI CALL ---------- */
 export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.6, max_tokens = 2048, lang = 'en' } = {}) {
   const config = customConfig || getModelConfig()
   const isLocalOmniRoute = config.baseUrl.includes('localhost') || config.baseUrl.includes('127.0.0.1')
+  const isProd = !isLocalOmniRoute
 
   const targetUrl = isLocalOmniRoute 
     ? `${config.baseUrl}/chat/completions` 
     : '/api/ai'
+
+  // Production speed optimization: cap max output tokens to 350 for lightning response times
+  const effectiveTokens = isProd ? Math.min(max_tokens, 350) : max_tokens
 
   async function makeCall(msgs, tokens) {
     const headers = { 'Content-Type': 'application/json' }
@@ -195,16 +199,17 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
   }
 
   const msgs = [
-    { role: 'system', content: getSystemPrompt(lang) },
+    { role: 'system', content: getSystemPrompt(lang, isProd) },
     { role: 'user', content: prompt }
   ]
-  let full = await makeCall(msgs, max_tokens)
+  let full = await makeCall(msgs, effectiveTokens)
 
-  const needsContinue = full.length > 100 && !/[.!?]\s*$/.test(full.trim()) && !full.includes('[DONE]')
+  // In production, disable multi-step continuation calls to ensure fast 1-step responses
+  const needsContinue = !isProd && full.length > 100 && !/[.!?]\s*$/.test(full.trim()) && !full.includes('[DONE]')
   if (needsContinue) {
     try {
       const contMsgs = [
-        { role: 'system', content: getSystemPrompt(lang) },
+        { role: 'system', content: getSystemPrompt(lang, false) },
         { role: 'user', content: prompt },
         { role: 'assistant', content: full },
         { role: 'user', content: lang === 'ar' ? 'أكمل الإجابة من حيث توقفت بدون تكرار.' : 'Continue from where you left off without repeating.' }
@@ -217,6 +222,56 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
   return full
 }
 
+/* Production ultra-fast concise system prompts */
+const PROD_SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst.
+Provide ULTRA-CONCISE, FAST, HIGH-IMPACT financial analysis. Be extremely direct and brief!
+
+RULES:
+1. Ultra-Concise: Max 1-2 brief sentences per section. No unnecessary intro or filler.
+2. Exact Tools & Assets: Always name specific platforms (TradingView, MetaTrader 5) and exact pairs/assets (EUR/USD, USD/JPY, Gold XAU/USD, S&P 500).
+3. Exact Numbers: Provide realistic pip ranges (e.g. 30-50 pips).
+4. Zero Fluff: No placeholders, no generic filler text.
+
+REQUIRED MARKDOWN FORMAT:
+## 📊 Macro Overview
+1-2 brief sentences explaining the economic metric and central bank impact.
+
+## 📈 Impact Scenarios
+- **Above Forecast**: Bullish [USD/Asset], Bearish [Asset], expected 30-50 pips.
+- **Below Forecast**: Bearish [USD/Asset], Bullish [Asset], expected 30-50 pips.
+
+## 🎯 Key Assets
+- **EUR/USD**: Primary pair reaction and expected pip move.
+- **XAU/USD (Gold)**: Dollar & bond yield reaction.
+
+## 🧠 Quick Trade Plan
+- **Setup**: Mark 1h support/resistance on **TradingView** or **MT5**. Wait for 5m candle close before entry.`
+
+const PROD_SYSTEM_PROMPT_AR = `أنت MarketScope — خبير اقتصادي كلي ومحلل أسواق تداول.
+قدّم تحليلاً موجزاً جداً، سريعاً، ومباشراً عالية الأثر. يُمنع الحشو والإطالة!
+
+القواعد:
+1. إيجاز شديد: جملة إلى جملتين كحد أقصى لكل قسم بدون مقدمات.
+2. أدوات وأصول محددة: اذكر منصات صريحة (TradingView, MetaTrader 5) وأزواجاً محددة بالاسم (EUR/USD, USD/JPY, XAU/USD الذهب, S&P 500).
+3. نقاط تذبذب واضحة: اذكر نقاط تحرك متوقعة (مثلاً 30-50 نقطة).
+4. يُمنع الحشو أو النصوص المبهمة.
+
+تنسيق الماركداون:
+## 📊 نظرة اقتصادية
+جملتان موجزتان توضحان المؤشر وأثره على البنك المركزي.
+
+## 📈 سيناريوهات الأثر
+- **أعلى من التوقعات**: صعود [الدولار/الأصل]، هبوط [الأصل المقابل]، تذبذب 30-50 نقطة.
+- **أقل من التوقعات**: هبوط [الدولار/الأصل]، صعود [الأصل المقابل]، تذبذب 30-50 نقطة.
+
+## 🎯 الأصول الرئيسية
+- **EUR/USD**: الحركة والمدى المتوقع بالنقاط.
+- **XAU/USD الذهب**: أثر حركة الدولار وعوائد السندات.
+
+## 🧠 خطة تداول سريعة
+- **التنفيذ**: حدد مستويات 1h على **TradingView** أو **MT5**. انتظر إغلاق شمعة 5 دقائق.`
+
+/* Detailed local system prompts */
 const SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst and active trader mentor.
 Your goal is to provide deep, actionable, highly specific financial insights. NEVER give generic, vague, or repetitive advice.
 
@@ -299,7 +354,10 @@ const SYSTEM_PROMPT_AR = `أنت MarketScope — خبير تحليلات اقت�
 - [ ] **إدارة المخاطر**: ضع أمر وقف الخسارة على بعد 15-20 نقطة خارج ذيل شمعة الخبر. مخاطرة لا تتجاوز 1-2% من الحساب.
 - [ ] **أدوات التنفيذ**: استخدم أوامر OCO المعلقة (One-Cancels-the-Other) أو الأوامر المحددة على منصة MT5.`
 
-function getSystemPrompt(lang) {
+function getSystemPrompt(lang, isProd = false) {
+  if (isProd) {
+    return lang === 'ar' ? PROD_SYSTEM_PROMPT_AR : PROD_SYSTEM_PROMPT_EN
+  }
   return lang === 'ar' ? SYSTEM_PROMPT_AR : SYSTEM_PROMPT_EN
 }
 
