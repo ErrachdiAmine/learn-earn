@@ -45,10 +45,9 @@ export default async function handler(req, res) {
     }
 
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-      res.setHeader('Cache-Control', 'no-cache, no-transform')
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
       res.setHeader('Connection', 'keep-alive')
-      res.setHeader('X-Accel-Buffering', 'no')
 
       const reader = nvidiaRes.body.getReader()
       const decoder = new TextDecoder()
@@ -57,15 +56,13 @@ export default async function handler(req, res) {
         const { done, value } = await reader.read()
         if (done) break
         res.write(decoder.decode(value, { stream: true }))
-        if (typeof res.flush === 'function') res.flush()
       }
       res.end()
-      return
+    } else {
+      const data = await nvidiaRes.json()
+      return res.status(200).json(data)
     }
-
-    const data = await nvidiaRes.json()
-    return res.status(200).json(data)
   } catch (error) {
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: error.message || 'Internal server error' })
   }
 }

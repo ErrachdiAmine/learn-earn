@@ -12,49 +12,6 @@ const impactMeta = {
 const impactMetaAr = { high: 'عالي', med: 'متوسط', low: 'منخفض' }
 const currencyFlag = { USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', COM: '🛢️', JPY: '🇯🇵', AUD: '🇦🇺', CAD: '🇨🇦' }
 
-function SmoothMarkdown({ text }) {
-  const [displayed, setDisplayed] = useState('')
-  const targetRef = useRef('')
-  const intervalRef = useRef(null)
-
-  useEffect(() => {
-    targetRef.current = text || ''
-    if (!text) {
-      setDisplayed('')
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      intervalRef.current = null
-      return
-    }
-
-    if (!intervalRef.current) {
-      intervalRef.current = setInterval(() => {
-        setDisplayed(prev => {
-          const target = targetRef.current
-          if (prev.length >= target.length) {
-            clearInterval(intervalRef.current)
-            intervalRef.current = null
-            return target
-          }
-          const diff = target.length - prev.length
-          // Dynamic typing step: 2 to 6 characters per tick (12ms) for smooth reading flow
-          const step = Math.min(diff, Math.max(2, Math.floor(diff / 6)))
-          return target.slice(0, prev.length + step)
-        })
-      }, 12)
-    }
-  }, [text])
-
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [])
-
-  if (!displayed) return null
-
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(displayed) }} />
-}
-
 /* Translation strings for EN / AR */
 const T = {
   en: {
@@ -158,9 +115,9 @@ export default function App() {
 
   const runAnalysis = async () => {
     if (!selectedEvent) return
-    setAnalyzing(true); setAiError(null); setAnalysis('')
+    setAnalyzing(true); setAiError(null); setAnalysis(null)
     try {
-      const res = await analyzeEvent(selectedEvent, lang, (chunk) => setAnalysis(chunk))
+      const res = await analyzeEvent(selectedEvent, lang)
       setAnalysis(res)
     } catch (e) {
       setAiError(e.message)
@@ -169,9 +126,9 @@ export default function App() {
 
   const runScenario = async () => {
     if (!selectedEvent || !scenario.trim()) return
-    setScenarioLoading(true); setScenarioRes(''); setAiError(null)
+    setScenarioLoading(true); setScenarioRes(null); setAiError(null)
     try {
-      const res = await simulateScenario(selectedEvent, scenario, lang, (chunk) => setScenarioRes(chunk))
+      const res = await simulateScenario(selectedEvent, scenario, lang)
       setScenarioRes(res)
     } catch (e) { setAiError(e.message) }
     finally { setScenarioLoading(false) }
@@ -387,29 +344,14 @@ function FollowUpChat({ context, lang }) {
   const send = async () => {
     const q = input.trim()
     if (!q || loading) return
-    const userMsg = { role: 'user', content: q }
-    const assistantIndex = messages.length + 1
-    setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '...' }])
+    setMessages(prev => [...prev, { role: 'user', content: q }])
     setInput('')
     setLoading(true)
     try {
-      await followUpChat(context, q, lang, (chunk) => {
-        setMessages(prev => {
-          const updated = [...prev]
-          if (updated.length > 0) {
-            updated[updated.length - 1] = { role: 'assistant', content: chunk }
-          }
-          return updated
-        })
-      })
+      const answer = await followUpChat(context, q, lang)
+      setMessages(prev => [...prev, { role: 'assistant', content: answer }])
     } catch (e) {
-      setMessages(prev => {
-        const updated = [...prev]
-        if (updated.length > 0) {
-          updated[updated.length - 1] = { role: 'assistant', content: `⚠️ ${e.message}` }
-        }
-        return updated
-      })
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${e.message}` }])
     } finally {
       setLoading(false)
     }
@@ -423,7 +365,7 @@ function FollowUpChat({ context, lang }) {
         <div key={i} className={`msg ${msg.role}`}>
           <div className="msg-bubble">
             {msg.role === 'assistant' ? (
-              <SmoothMarkdown text={msg.content} />
+              <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) }} />
             ) : (
               <p>{msg.content}</p>
             )}
@@ -488,10 +430,10 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
           {analyzing ? t.analyzing : (analysis ? t.reanalyze : t.analyzeBtn)}
         </button>
         {aiError && <p className="error">{aiError}</p>}
-        {analyzing && !analysis && <div className="loader">{t.thinking} <i /></div>}
+        {analyzing && <div className="loader">{t.thinking} <i /></div>}
         {analysis && (
           <div className="ai-result">
-            <SmoothMarkdown text={analysis} />
+            <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(analysis) }} />
             <FollowUpChat
               context={{ type: 'analysis', event, previousResponse: analysis }}
               lang={lang}
@@ -508,10 +450,10 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
               placeholder={t.simPlaceholder} />
             <button className="btn btn-primary" onClick={onScenario} disabled={scenarioLoading || !scenario.trim()}>{scenarioLoading ? '…' : t.run}</button>
           </div>
-          {scenarioLoading && !scenarioRes && <div className="loader">{t.simulating} <i /></div>}
+          {scenarioLoading && <div className="loader">{t.simulating} <i /></div>}
           {scenarioRes && (
             <div className="ai-result">
-              <SmoothMarkdown text={scenarioRes} />
+              <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(scenarioRes) }} />
               <FollowUpChat
                 context={{ type: 'simulation', event, scenario, previousResponse: scenarioRes }}
                 lang={lang}
@@ -566,11 +508,8 @@ function LearnView({ explainConcept, addJournalEntry, lang }) {
   const run = async (q) => {
     const query = q || topic
     if (!query.trim()) return
-    setLoading(true); setError(null); setRes('')
-    try {
-      const resText = await explainConcept(query, lang, (chunk) => setRes(chunk))
-      setRes(resText)
-    }
+    setLoading(true); setError(null); setRes(null)
+    try { setRes(await explainConcept(query, lang)) }
     catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
@@ -597,10 +536,10 @@ function LearnView({ explainConcept, addJournalEntry, lang }) {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {loading && !res && <div className="loader">{t.teaching} <i /></div>}
+      {loading && <div className="loader">{t.teaching} <i /></div>}
       {res && (
         <div className="ai-result">
-          <SmoothMarkdown text={res} />
+          <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(res) }} />
           <FollowUpChat context={{ type: 'concept', topic, previousResponse: res }} lang={lang} />
         </div>
       )}
