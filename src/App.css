@@ -500,7 +500,8 @@ input::placeholder { color: var(--text-muted); }
 .toggle.on .knob { transform: translateX(18px); }
 [dir="rtl"] .toggle .knob { left: auto; right: 2px; }
 [dir="rtl"] .toggle.on .knob { transform: translateX(-18px); }
-.panel-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); display: flex; justify-content: center; }
+.panel-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.author-tag { font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.3px; }
 
 /* ===== Mobile Responsive & Performance Optimizations ===== */
 @media (max-width: 640px) {

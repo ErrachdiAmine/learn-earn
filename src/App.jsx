@@ -368,6 +368,7 @@ function SidePanel({ open, onClose, lang, setLang, dark, setDark, modelName }) {
 
         <div className="panel-footer">
           <span className="model-chip">{modelName}</span>
+          <span className="author-tag">errachdi</span>
         </div>
       </aside>
     </>
