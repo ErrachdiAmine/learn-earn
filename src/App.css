@@ -231,7 +231,17 @@ body {
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
-.sheet-handle { width: 40px; height: 4px; border-radius: var(--radius-full); background: var(--border-strong); margin: 4px auto 12px; }
+.sheet-handle {
+  width: 46px; height: 5px; border-radius: var(--radius-full);
+  background: var(--border-strong); margin: 4px auto 14px;
+  cursor: grab; transition: background 0.2s, transform 0.2s;
+  touch-action: none;
+}
+.sheet-handle:active, .sheet.dragging .sheet-handle {
+  cursor: grabbing;
+  background: var(--brand);
+  transform: scaleX(1.2);
+}
 .sheet-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .sheet-header h3 { margin: 0; font-size: 19px; font-weight: 800; }
 .sheet .desc { color: var(--text-secondary); font-size: 14px; margin: 10px 0 16px; line-height: 1.55; }
@@ -254,11 +264,17 @@ body {
 .markdown h4 { font-size: 14px; margin: 10px 0 4px; color: var(--text); font-weight: 700; }
 .markdown ul, .markdown ol { margin: 6px 0; padding-left: 20px; }
 .markdown li { margin: 3px 0; }
-.markdown p { margin: 8px 0; }
+.markdown p, .markdown li {
+  margin: 6px 0;
+  line-height: 1.6;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
 .markdown strong { color: var(--text); font-weight: 800; }
 .markdown table {
   width: 100%; border-collapse: collapse; margin: 10px 0;
   font-size: 13px; border: 1px solid var(--border);
+  display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
 }
 .markdown th, .markdown td {
   border: 1px solid var(--border); padding: 7px 10px; text-align: left;

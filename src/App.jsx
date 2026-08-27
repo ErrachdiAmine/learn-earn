@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { marked } from 'marked'
+
+/* Configure marked for GFM and single line-breaks */
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
 import { DEFAULT_CALENDAR, analyzeEvent, simulateScenario, explainConcept, followUpChat, fetchLiveCalendar } from './services/ai.js'
 import { getModelName } from './config/model.js'
 
@@ -411,6 +417,41 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
   const [saved, setSaved] = useState(false)
   const t = T[lang]
 
+  /* Touch drag-to-dismiss state */
+  const [dragY, setDragY] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
+  const touchStartY = useRef(0)
+  const sheetRef = useRef(null)
+
+  const handleTouchStart = (e) => {
+    const scrollTop = sheetRef.current ? sheetRef.current.scrollTop : 0
+    if (scrollTop <= 0) {
+      touchStartY.current = e.touches[0].clientY
+      setIsDragging(true)
+    }
+  }
+
+  const handleTouchMove = (e) => {
+    if (!isDragging) return
+    const currentY = e.touches[0].clientY
+    const deltaY = currentY - touchStartY.current
+    if (deltaY > 0) {
+      setDragY(deltaY)
+    } else {
+      setDragY(0)
+    }
+  }
+
+  const handleTouchEnd = () => {
+    if (!isDragging) return
+    setIsDragging(false)
+    if (dragY > 90) {
+      onClose()
+    } else {
+      setDragY(0)
+    }
+  }
+
   const savePrediction = () => {
     addJournal({ eventTitle: event.title, eventId: event.id, direction, note, won: null })
     setSaved(true)
@@ -419,8 +460,19 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
-        <div className="sheet-handle" />
+      <div
+        ref={sheetRef}
+        className={`sheet ${isDragging ? 'dragging' : ''}`}
+        style={{
+          transform: dragY > 0 ? `translate3d(0, ${dragY}px, 0)` : undefined,
+          transition: isDragging ? 'none' : 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}
+        onClick={e => e.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        <div className="sheet-handle" title={lang === 'ar' ? 'اسحب لأسفل للإغلاق' : 'Drag down to close'} />
         <div className="sheet-header">
           <div>
             <div className="event-top">

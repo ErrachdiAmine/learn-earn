@@ -148,8 +148,8 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     ? `${config.baseUrl}/chat/completions` 
     : '/api/ai'
 
-  // Ample token budget so responses are concise yet never cut off mid-sentence
-  const effectiveTokens = isProd ? Math.min(max_tokens, 1000) : max_tokens
+  // Ample token budget (2048 tokens) so responses are rich, detailed, formatted, and never cut off mid-sentence
+  const effectiveTokens = max_tokens || 2048
 
   async function makeCall(msgs, tokens) {
     const headers = { 'Content-Type': 'application/json' }
@@ -165,7 +165,7 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
         messages: msgs,
         max_tokens: tokens,
         temperature,
-        stream: true
+        stream: false
       })
     })
 
@@ -224,22 +224,22 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
 
 /* Production ultra-fast concise system prompts */
 const PROD_SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst.
-Provide concise, direct, high-impact financial analysis.
+Provide clear, direct, high-impact financial analysis using structured Markdown formatting.
 
 RULES:
-1. Concise & Direct: Be extremely brief and get straight to the point. No intro, recap, or conversational filler.
-2. Free Format: Structure your response freely using whatever format fits best (clean bullet points, quick lists, or short paragraphs). Do NOT follow any rigid markdown template. Avoid huge multi-row tables.
-3. Concrete Details: When relevant, state exact software (TradingView, MetaTrader 5), specific financial assets (EUR/USD, USD/JPY, Gold XAU/USD, S&P 500), and numeric pip expectations (e.g. 30-50 pips).
-4. Complete Thought: Keep your output concise, but ALWAYS finish your full thought and end cleanly with ending punctuation. Never stop mid-sentence or mid-word.`
+1. Concise & Direct: Get straight to the point without introductory fluff or conversational recap.
+2. Clean Markdown Formatting: Format your response beautifully using bold text (**term**), clean bullet points, short headers (###), or crisp Markdown tables when analyzing scenarios.
+3. Concrete Details: Always state exact software (TradingView, MetaTrader 5), specific financial assets (EUR/USD, USD/JPY, Gold XAU/USD, S&P 500), and numeric pip expectations (e.g. 30-50 pips).
+4. Complete Thought: ALWAYS finish your full thought and end cleanly with terminal punctuation. Never stop mid-sentence.`
 
 const PROD_SYSTEM_PROMPT_AR = `أنت MarketScope — خبير اقتصادي كلي ومحلل أسواق تداول.
-قدّم تحليلاً موجزاً، مباشراً، وعالي الأثر.
+قدّم تحليلاً مباشراً وعالي الأثر مع تنسيق ماركداون (Markdown) ممتاز.
 
 القواعد:
-1. موجز ومباشر: كن مختصراً وادخل في صلب الموضوع مباشرة دون مقدمات أو حشو.
-2. حرية التنسيق: نسّق إجابتك بحرية بالطريقة الأنسب (نقاط سريعة، قوائم، أو فقرات قصيرة) دون الالتزام بقالب محدد. تجنب الجداول الطويلة والمعقدة.
+1. موجز ومباشر: ادخل في صلب الموضوع مباشرة دون مقدمات أو حشو.
+2. تنسيق ماركداون أنيق: نسّق إجابتك باستخدام خط عريض (**مصطلح**)، نقاط مرتبة، عناوين فرعية (###)، أو جداول ماركداون عند تحليل السيناريوهات.
 3. تفاصيل صريحة: اذكر دائماً منصات صريحة (TradingView, MetaTrader 5) وأزواجاً محددة (EUR/USD, USD/JPY, XAU/USD الذهب) مع نقاط تذبذب متوقعة عند الحاجة.
-4. إكمال الفكرة: اجعل إجابتك موجزة، ولكن أنهِ فكرتك دائماً بشكل كامل ونظيف مع نقطة في النهاية. يُمنع التوقف في منتصف الجملة.`
+4. إكمال الفكرة: أنهِ فكرتك دائماً بشكل كامل ونظيف مع نقطة في النهاية. يُمنع التوقف في منتصف الجملة.`
 
 /* Detailed local system prompts */
 const SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst and active trader mentor.
