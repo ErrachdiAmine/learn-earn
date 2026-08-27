@@ -1,11 +1,5 @@
-// src/services/ai.js
-import { getModelConfig } from '../config/model.js'
+// src/services/ai.js - AI analysis & live calendar parsing service
 
-const API_KEY = import.meta.env.VITE_NVIDIA_API_KEY || ''
-const API_BASE = import.meta.env.VITE_NVIDIA_API_URL || 'https://integrate.api.nvidia.com/v1'
-
-/* ---------- LIVE CALENDAR FETCHER ---------- */
-/** Fetches this week's economic events from ForexFactory free XML feed. */
 let calendarCache = { data: null, timestamp: 0 }
 const CACHE_TTL = 30 * 60 * 1000 // 30 min
 
@@ -23,8 +17,6 @@ export async function fetchLiveCalendar(force = false) {
     weekEnd.setDate(weekStart.getDate() + 6)
     weekEnd.setHours(23, 59, 59, 999)
 
-    // Try proxied endpoint first (dev), fallback to direct
-    // Validate response is actual XML (not an HTML rate-limit/error page)
     let xmlText = ''
     try {
       const res = await fetch('/api/calendar')
@@ -47,7 +39,6 @@ export async function fetchLiveCalendar(force = false) {
       calendarCache = { data: events, timestamp: now }
       return events
     }
-    // If parsing yields nothing, return demo data (don't cache empty)
     return DEFAULT_CALENDAR
   } catch (e) {
     console.warn('Live calendar fetch failed, using demo data:', e)
@@ -68,124 +59,84 @@ function parseForexFactoryXML(xml, weekStart, weekEnd) {
     'BRL': 'BRL', 'MXN': 'MXN', 'ZAR': 'ZAR', 'TRY': 'TRY', 'RUB': 'RUB'
   }
 
-  const countryFlag = {
-    'USD': '🇺🇸', 'EUR': '🇪🇺', 'GBP': '🇬🇧', 'JPY': '🇯🇵', 'CHF': '🇨🇭',
-    'AUD': '🇦🇺', 'CAD': '🇨🇦', 'NZD': '🇳🇿', 'CNY': '🇨🇳', 'INR': '🇮🇳',
-    'BRL': '🇧🇷', 'MXN': '🇲🇽', 'ZAR': '🇿🇦', 'TRY': '🇹🇷', 'RUB': '🇷🇺'
-  }
-
-  for (const node of eventNodes) {
+  let idCounter = 1
+  eventNodes.forEach(node => {
     const title = node.querySelector('title')?.textContent?.trim() || ''
     const country = node.querySelector('country')?.textContent?.trim() || ''
     const dateStr = node.querySelector('date')?.textContent?.trim() || ''
     const timeStr = node.querySelector('time')?.textContent?.trim() || ''
-    const impact = (node.querySelector('impact')?.textContent?.trim() || 'Low').toLowerCase()
-    const forecast = node.querySelector('forecast')?.textContent?.trim() || '—'
-    const previous = node.querySelector('previous')?.textContent?.trim() || '—'
-    const url = node.querySelector('url')?.textContent?.trim() || ''
+    const impactStr = node.querySelector('impact')?.textContent?.trim() || 'Low'
+    const forecast = node.querySelector('forecast')?.textContent?.trim() || ''
+    const previous = node.querySelector('previous')?.textContent?.trim() || ''
 
-    // Skip events without proper date/time
-    if (!dateStr || !timeStr) continue
+    if (!title || !dateStr) return
 
-    // Parse date: "08-26-2026" -> Date
-    const [mm, dd, yyyy] = dateStr.split('-').map(Number)
-    if (!yyyy || !mm || !dd) continue
+    let eventDate = parseFFDate(dateStr, timeStr)
+    if (!eventDate) return
 
-    // Parse time: "10:45am" or "10:45pm" -> hours/minutes
-    let hours = 0, minutes = 0
-    const timeMatch = timeStr.match(/(\d{1,2}):(\d{2})(am|pm)/i)
-    if (timeMatch) {
-      hours = parseInt(timeMatch[1])
-      minutes = parseInt(timeMatch[2])
-      const ampm = timeMatch[3].toLowerCase()
-      if (ampm === 'pm' && hours !== 12) hours += 12
-      if (ampm === 'am' && hours === 12) hours = 0
-    } else if (timeStr === 'All Day' || timeStr === 'Tentative') {
-      hours = 0; minutes = 0
-    } else {
-      continue // skip unparseable
-    }
+    if (eventDate < weekStart || eventDate > weekEnd) return
 
-    const eventDate = new Date(yyyy, mm - 1, dd, hours, minutes)
+    const currency = countryToCurrency[country] || country || 'USD'
 
-    // Only include events within the current week window
-    if (eventDate < weekStart || eventDate > weekEnd) continue
+    let impact = 'low'
+    const impLower = impactStr.toLowerCase()
+    if (impLower.includes('high') || impLower.includes('red')) impact = 'high'
+    else if (impLower.includes('medium') || impLower.includes('orange') || impLower.includes('yellow')) impact = 'medium'
 
-    const currency = countryToCurrency[country] || country
     events.push({
-      id: `ff-${currency}-${title}-${eventDate.getTime()}`.replace(/\s+/g, '-').toLowerCase(),
-      date: eventDate.toISOString(),
-      currency,
+      id: `ff-${idCounter++}`,
       title,
-      impact: impact === 'high' ? 'high' : impact === 'medium' ? 'med' : 'low',
-      forecast: forecast || '—',
-      previous: previous || '—',
-      description: getEventDescription(title, currency),
-      sourceUrl: url
+      currency,
+      impact,
+      date: eventDate.toISOString(),
+      timeStr: timeStr || 'All Day',
+      forecast: forecast || 'n/a',
+      previous: previous || 'n/a',
+      actual: null,
+      description: `${impactStr} impact event for ${currency}. Forecast: ${forecast || 'N/A'}, Previous: ${previous || 'N/A'}.`
     })
-  }
+  })
 
   return events.sort((a, b) => new Date(a.date) - new Date(b.date))
 }
 
-/** Generate a teaching description for known events. */
-function getEventDescription(title, currency) {
-  const lower = title.toLowerCase()
-  const descMap = {
-    'cpi': 'Consumer Price Index — primary inflation gauge. Higher → hawkish central bank → currency up.',
-    'core cpi': 'CPI excluding food & energy. Fed/ECB watch this closely for underlying trend.',
-    'pce': 'Personal Consumption Expenditures — Fed\'s preferred inflation measure.',
-    'core pce': 'Core PCE — Fed\'s #1 inflation target. Above 2% → hawkish.',
-    'fomc': 'Federal Reserve rate decision. Most market-moving USD event. Watch statement + press conference.',
-    'rate decision': 'Central bank interest rate decision. Higher rates → currency strength.',
-    'non-farm payrolls': 'US jobs added (excl. farming). #1 monthly volatility event. Strong jobs → higher rates → USD up.',
-    'nfp': 'Non-Farm Payrolls — US employment change. Biggest monthly mover for USD.',
-    'unemployment': 'Unemployment rate. Lower → tighter labor market → hawkish.',
-    'gdp': 'Gross Domestic Product — economic growth. Above forecast → currency up, stocks up.',
-    'retail sales': 'Consumer spending (~70% of GDP). Strong → hawkish → currency up.',
-    'industrial production': 'Factory/mining/utility output. Leading indicator for growth.',
-    'pmi': 'Purchasing Managers Index — survey of business conditions. >50 = expansion.',
-    'trade balance': 'Exports minus imports. Surplus → currency demand up.',
-    'current account': 'Broad trade + investment income. Surplus → currency support.',
-    'consumer confidence': 'Household sentiment. High → spending → growth → currency up.',
-    'opec': 'OPEC production decisions. Affects oil, CAD, NOK, energy stocks.',
-    'crude oil inventories': 'Weekly US oil storage. Build → oil down, USD/CAD up.',
-    'eia': 'Energy Information Administration oil data. Moves WTI, CAD, energy sector.',
-  }
+function parseFFDate(dateStr, timeStr) {
+  try {
+    const [month, day, year] = dateStr.split('-').map(Number)
+    if (!month || !day || !year) return null
 
-  for (const [key, desc] of Object.entries(descMap)) {
-    if (lower.includes(key)) return desc
+    let hours = 12
+    let minutes = 0
+
+    if (timeStr && timeStr !== 'All Day' && timeStr !== 'Day 1' && timeStr !== 'Tentative') {
+      const match = timeStr.match(/(\d+):(\d+)(am|pm)/i)
+      if (match) {
+        hours = parseInt(match[1], 10)
+        minutes = parseInt(match[2], 10)
+        const ampm = match[3].toLowerCase()
+        if (ampm === 'pm' && hours < 12) hours += 12
+        if (ampm === 'am' && hours === 12) hours = 0
+      }
+    }
+
+    return new Date(year, month - 1, day, hours, minutes)
+  } catch {
+    return null
   }
-  return `${title} for ${currency}. Watch for deviation from forecast — moves ${currency} pairs.`
 }
 
-/* ---------- DEFAULT DEMO DATA (fallback) ---------- */
 export const DEFAULT_CALENDAR = [
-  { id: 'cpi-us-may', date: '2026-09-01T12:30:00', currency: 'USD', title: 'CPI y/y', impact: 'high',
-    forecast: '2.4%', previous: '2.3%',
-    description: 'CPI (Consumer Price Index) measures US inflation. Higher-than-expected → bonds sell off, USD rises, rate-cut expectations retreat. Watch EUR/USD + DXY + gold.' },
-  { id: 'fomc-rate', date: '2026-09-03T18:00:00', currency: 'USD', title: 'FOMC Rate Decision', impact: 'high',
-    forecast: '4.50%', previous: '4.50%',
-    description: 'Federal Reserve interest rate decision. The most market-moving event in USD. Focus on the statement tone and press conference.' },
-  { id: 'nfp-us', date: '2026-09-05T12:30:00', currency: 'USD', title: 'Non-Farm Payrolls', impact: 'high',
-    forecast: '150K', previous: '175K',
-    description: 'Non-Farm Payrolls = US jobs added (excl. farming). The single most volatile monthly event. Deviation from forecast moves USD, indices, gold.' },
-  { id: 'ecb-zone', date: '2026-09-04T11:15:00', currency: 'EUR', title: 'ECB Rate Decision', impact: 'high',
-    forecast: '3.00%', previous: '3.00%',
-    description: 'European Central Bank rate decision. Moves EUR pairs (EUR/USD, EUR/GBP). Watch hawkish/dovish tone.' },
-  { id: 'gdp-uk', date: '2026-09-02T06:00:00', currency: 'GBP', title: 'GDP m/m', impact: 'med',
-    forecast: '0.2%', previous: '0.1%',
-    description: 'Gross Domestic Product growth for UK. Above forecast → GBP strength, UK index up.' },
-  { id: 'cpi-de', date: '2026-09-01T06:00:00', currency: 'EUR', title: 'German CPI m/m', impact: 'med',
-    forecast: '0.3%', previous: '0.2%',
-    description: 'German CPI is the bellwether for eurozone inflation. Higher CPI → hawkish ECB → EUR up.' },
-  { id: 'oil-ops', date: '2026-09-06T14:00:00', currency: 'COM', title: 'OPEC Monthly Report', impact: 'med',
-    forecast: '—', previous: '—',
-    description: 'OPEC monthly report on oil supply/demand. Affects WTI/Brent, USD/CAD, commodity currencies.' },
-  { id: 'ret-us', date: '2026-09-07T12:30:00', currency: 'USD', title: 'Retail Sales m/m', impact: 'med',
-    forecast: '0.4%', previous: '0.2%',
-    description: 'US retail sales = consumer spending (approx 70% of GDP). Strong → hawkish → USD up.' }
+  { id: '1', title: 'US Non-Farm Payrolls (NFP)', currency: 'USD', impact: 'high', date: '2026-08-28T12:30:00Z', forecast: '180K', previous: '206K', description: 'Monthly change in employment excluding the farming industry. Primary driver of Fed policy expectations.' },
+  { id: '2', title: 'ECB Interest Rate Decision', currency: 'EUR', impact: 'high', date: '2026-08-28T12:15:00Z', forecast: '3.75%', previous: '4.00%', description: 'European Central Bank benchmark rate policy announcement and monetary policy statement.' },
+  { id: '3', title: 'US Core CPI (MoM)', currency: 'USD', impact: 'high', date: '2026-08-27T12:30:00Z', forecast: '0.2%', previous: '0.3%', description: 'Measures change in price of goods/services excluding food & energy. Key inflation gauge.' },
+  { id: '4', title: 'UK GDP (QoQ)', currency: 'GBP', impact: 'medium', date: '2026-08-27T06:00:00Z', forecast: '0.4%', previous: '0.7%', description: 'Broadest measure of economic activity and overall economic health in the United Kingdom.' },
+  { id: '5', title: 'BOJ Core CPI (YoY)', currency: 'JPY', impact: 'medium', date: '2026-08-26T23:30:00Z', forecast: '2.1%', previous: '1.9%', description: 'Bank of Japan preferred inflation metric influencing yield curve control adjustments.' },
+  { id: '6', title: 'Australia Employment Change', currency: 'AUD', impact: 'high', date: '2026-08-27T01:30:00Z', forecast: '25.0K', previous: '50.2K', description: 'Change in the number of employed people in Australia. High market sensitivity for AUD pairs.' },
+  { id: '7', title: 'Canada Core Retail Sales (MoM)', currency: 'CAD', impact: 'low', date: '2026-08-28T12:30:00Z', forecast: '-0.1%', previous: '0.3%', description: 'Consumer spending excluding autos. Indicator of underlying Canadian retail demand.' },
+  { id: '8', title: 'Swiss Producer & Import Prices', currency: 'CHF', impact: 'low', date: '2026-08-26T06:30:00Z', forecast: '0.1%', previous: '0.0%', description: 'Leading indicator of consumer inflation in Switzerland.' },
 ].sort((a, b) => new Date(a.date) - new Date(b.date))
+
+import { getModelConfig } from '../config/model'
 
 /* ---------- AI CALL (streaming SSE parsing) ---------- */
 export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.6, max_tokens = 2048, lang = 'en' } = {}) {
@@ -196,7 +147,6 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     ? `${config.baseUrl}/chat/completions` 
     : '/api/ai'
 
-  // Helper to call the API and parse SSE
   async function makeCall(msgs, tokens) {
     const headers = { 'Content-Type': 'application/json' }
     if (isLocalOmniRoute) {
@@ -214,10 +164,12 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
         stream: true
       })
     })
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(`API Error: ${err.error?.message || res.statusText}`)
     }
+
     const text = await res.text()
     if (text.includes('data:')) {
       let content = ''
@@ -230,7 +182,6 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
           const json = JSON.parse(payload)
           const delta = json.choices?.[0]?.delta
           if (delta?.content) content += delta.content
-          else if (delta?.reasoning_content) { /* skip chain-of-thought */ }
         } catch { /* ignore keep-alive / non-JSON lines */ }
       }
       return content.trim()
@@ -243,14 +194,12 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     }
   }
 
-  // First call
   const msgs = [
     { role: 'system', content: getSystemPrompt(lang) },
     { role: 'user', content: prompt }
   ]
   let full = await makeCall(msgs, max_tokens)
 
-  // Auto-continue if response seems cut off (no ending punctuation, still has content)
   const needsContinue = full.length > 100 && !/[.!?]\s*$/.test(full.trim()) && !full.includes('[DONE]')
   if (needsContinue) {
     try {
@@ -258,7 +207,7 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
         { role: 'system', content: getSystemPrompt(lang) },
         { role: 'user', content: prompt },
         { role: 'assistant', content: full },
-        { role: 'user', content: lang === 'ar' ? 'أكمل الإجابة من حيث توقفت.' : 'Continue from where you left off.' }
+        { role: 'user', content: lang === 'ar' ? 'أكمل الإجابة من حيث توقفت بدون تكرار.' : 'Continue from where you left off without repeating.' }
       ]
       const more = await makeCall(contMsgs, 1024)
       if (more) full += '\n\n' + more
@@ -268,83 +217,95 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
   return full
 }
 
-const SYSTEM_PROMPT_EN = `You are MarketScope — a trading mentor who teaches through events and effect analysis.
-Explain economic events, how markets react, and practical trading lessons.
-Be concise, structured, and give concrete levels/trades where relevant.
-OUTPUT FORMAT (use exactly this markdown structure):
+const SYSTEM_PROMPT_EN = `You are MarketScope — an elite macroeconomic trading analyst and active trader mentor.
+Your goal is to provide deep, actionable, highly specific financial insights. NEVER give generic, vague, or repetitive advice.
+
+CRITICAL RULES FOR ALL ANSWERS:
+1. ALWAYS NAME SPECIFIC REAL-WORLD TOOLS & PLATFORMS:
+   - When discussing analysis or execution, name exact software: TradingView, MetaTrader 5 (MT5), Bloomberg Terminal, Reuters Eikon, ForexFactory, Finviz, Bookmap, OrderFlow / Exocharts. NEVER say "use market analysis programs" without naming them!
+2. ALWAYS NAME SPECIFIC FINANCIAL INSTRUMENTS & PAIRS:
+   - Name exact assets: EUR/USD, USD/JPY, GBP/USD, AUD/USD, XAU/USD (Gold), WTI Crude Oil, S&P 500 (SPX), US 10-Year Treasury Yields (TNX).
+3. PROVIDE REAL NUMERIC VOLATILITY & PRICE LEVELS:
+   - Give realistic pip/point movements (e.g. 40-70 pips in EUR/USD, $15-25 move in Gold) and specific technical concepts (e.g. 15-minute high/low breakout, 50% Fibonacci retest, VWAP rejection, OCO pending orders).
+4. NO DUMMY PLACEHOLDERS OR GENERIC REPETITION:
+   - Do NOT output placeholder text like "[why]" or "[direction]". Fill every single section with concrete analysis based on current market fundamentals.
+
+REQUIRED MARKDOWN OUTPUT FORMAT:
 
 ## 📊 What This Event Measures
-[2-3 sentences plain language]
+Provide 2-3 clear sentences explaining the macroeconomic metric, what central bank (Fed, ECB, BOJ, RBA) watches it, and why it shifts institutional sentiment.
 
 ## 📈 Market Effect Scenarios
-| Outcome vs Forecast | Interpretation | Likely Move |
-|---------------------|----------------|-------------|
-| Above forecast | [why] | [direction + assets] |
-| In-line | [why] | [direction + assets] |
-| Below forecast | [why] | [direction + assets] |
+| Outcome vs Forecast | Macro Interpretation | Likely Move & Primary Pairs |
+|---------------------|----------------------|-----------------------------|
+| Above Forecast | [Detailed hawk/dove shift] | [Bullish/Bearish direction + specific pairs like EUR/USD, USD/JPY] |
+| In-line | [Market priced-in effect] | [Rangebound / consolidation in specific pairs] |
+| Below Forecast | [Detailed macro shift] | [Bullish/Bearish direction + specific pairs like EUR/USD, XAU/USD] |
 
 ## 🎯 Key Assets Affected (Ranked by Sensitivity)
-1. **Primary**: [pair/instrument] — [why, typical pip range]
-2. **Secondary**: [pair/instrument] — [why]
-3. **Tertiary**: [pair/instrument] — [why]
+1. **Primary**: **EUR/USD** (or relevant pair) — Specific pip range expectation & sensitivity reason.
+2. **Secondary**: **XAU/USD (Gold)** — How dollar strength / yield shifts impact bullion.
+3. **Tertiary**: **S&P 500 (SPX) / US10Y** — Equity index / bond yield reaction.
 
-## ⏱️ Volatility & Timing
-- **First 2-5 min**: [pip range] spike
-- **Peak (5-30 min)**: [pip range]
-- **Settle (1-4 hrs)**: [behavior]
+## ⏱️ Volatility & Timing Breakdown
+- **First 2-5 min (News Spike)**: Initial 30-60 pip knee-jerk reaction. High slippage zone.
+- **Peak (5-30 min)**: Trend continuation or fakeout reversal. Best entry window on 5m chart in TradingView/MT5.
+- **Settle (1-4 hrs)**: Post-news consolidation around daily VWAP / Key Support-Resistance.
 
-## 🧠 Trade Planning Checklist
-- [ ] Pre-release: identify key levels (support/resistance)
-- [ ] Entry logic: [specific rule]
-- [ ] Stop: [placement logic]
-- [ ] Target: [R-multiple or level]
-- [ ] Avoid if: [condition]
+## 🧠 Trade Execution Checklist
+- [ ] **Chart Setup**: Mark key 1-hour support & resistance levels on **TradingView** or **MetaTrader 5**.
+- [ ] **News Strategy**: Wait for the 5-minute post-release candle close before entering (avoid trading during the spread-widening instant spike).
+- [ ] **Risk Management**: Place Stop Loss 15-20 pips beyond the news spike wick. Risk max 1-2% per trade.
+- [ ] **Execution Tools**: Use OCO (One-Cancels-the-Other) pending orders or limit orders on MT5/cTrader.`
 
-Use tables, bullet points, bold for emphasis. No fluff. Teach like a pro showing a junior trader.`
+const SYSTEM_PROMPT_AR = `أنت MarketScope — خبير تحليلات اقتصادية ومتداول محترف وموجّه أسواق عالمية.
+هدفك تقديم تحليلات مالية عميقة، محدودة بالدقة، وعملية جداً. يُمنع منعاً باتاً تقديم نصائح عامة أو مكررة أو مبهمة!
 
-const SYSTEM_PROMPT_AR = `أنت MarketScope — معلم تداول عربي يعلم المستخدمين من خلال الأحداث الاقتصادية وتحليل أثرها على الأسواق.
-اشرح الأحداث الاقتصادية وكيف تتفاعل الأسواق معها وقدم دروساً عملية للتداول.
-كن موجزاً ومنظماً وقدم مستويات وصفقات ملموسة.
-أجب دائماً باللغة العربية بصيغة الماركداون التالية (املأ الفراغات ولا تطرح أسئلة):
+قواعد حاسمة لجميع الإجابات:
+1. اذكر دائماً أسمـاء البرامج والأدوات الحقيقية بالكامل:
+   - عند ذكر برامج التحليل أو التداول، اذكر دائماً الأسماء التالية صراحة: TradingView، MetaTrader 5 (MT5)، Bloomberg Terminal، ForexFactory، Finviz، Bookmap، Exocharts. لا تقل أبداً "استخدم برامج تحليليـة" دون ذكر أسمائها!
+2. اذكر دائماً الأزواج والأدوات المالية المحددة بالاسم:
+   - اذكر دائماً أزواج ومؤشرات صريحة: EUR/USD, USD/JPY, GBP/USD, AUD/USD, XAU/USD (الذهب), النفط WTI, مؤشر S&P 500, عوائد السندات الأمريكية US10Y.
+3. قدم أرقام تذبذب ومستويات حقيقية بالنقاط:
+   - قدم تحركات واقعية بالنقاط (مثلاً: 40-70 نقطة لـ EUR/USD، 15-25 دولار للذهب) واستراتيجيات دقيقة (مثل كسر قمة/قاع شمعة 5 دقائق، إعادة اختبار الفيبوناتشي 50%، الارتداد من متوسط VWAP، أوامر OCO).
+4. لا تستخدم نصوص مبهمة أو تكرار عام:
+   - لا تترك أي خانات فارغة أو مكررة. املأ كل قسم بتحليل اقتصادي وفني دقيق بناءً على البيانات.
+
+تنسيق الماركداون المطلوب:
 
 ## 📊 ماذا يقيس هذا الحدث
-[اكتب هنا جملتين إلى ثلاث جمل بلغة بسيطة]
+2-3 جمل تشرح المؤشر الاقتصادي، والبنك المركزي المتابع له (الفيدرالي، الأوروبي، الياباني)، وكيف يغير معنويات المؤسسات المالية.
 
 ## 📈 سيناريوهات أثر السوق
-| النتيجة مقارنة بالتوقع | التفسير | الحركة المتوقعة |
-|---------------------|----------------|-------------|
-| أعلى من التوقع | [اكتب السبب] | [الاتجاه + الأصول] |
-| مطابق للتوقع | [اكتب السبب] | [الاتجاه + الأصول] |
-| أقل من التوقع | [اكتب السبب] | [الاتجاه + الأصول] |
+| النتيجة مقارنة بالتوقعات | التفسير الاقتصادي الكلي | الحركة المتوقعة والأزواج الرئيسية |
+|-------------------------|-------------------------|------------------------------------|
+| أعلى من التوقع | [تفسير التضخم/الفائدة] | [صعود/هبوط محدد + أزواج صريحة مثل EUR/USD, USD/JPY] |
+| مطابق للتوقع | [تأثير استيعاب السوق للخبر] | [تذبذب جانبي في نطاق محدد] |
+| أقل من التوقع | [تفسير التيسير/الضعف] | [صعود/هبوط محدد + أزواج صريحة مثل EUR/USD, XAU/USD] |
 
 ## 🎯 الأصول الأكثر تأثراً (حسب الحساسية)
-1. **الأساسي**: [الزوج/الأداة] — [السبب ومدى التحرك بالنقاط]
-2. **الثانوي**: [الزوج/الأداة] — [السبب]
-3. **الثالث**: [الزوج/الأداة] — [السبب]
+1. **الأساسي**: **EUR/USD** (أو الزوج المعني) — نطاق تحرك بالنقاط وحساسية الزوج.
+2. **الثانوي**: **XAU/USD (الذهب)** — أثر حركة الدولار وعوائد السندات على المعدن الأصفر.
+3. **الثالث**: **S&P 500 / US10Y** — رد فعل مؤشرات الأسهم وعوائد السندات.
 
-## ⏱️ التذبذب والتوقيت
-- **أول 2-5 دقائق**: قفزة [بالنقاط]
-- **الذروة (5-30 دقيقة)**: [بالنقاط]
-- **الاستقرار (1-4 ساعات)**: [السلوك]
+## ⏱️ تفكيك التذبذب والتوقيت
+- **أول 2-5 دقائق (قفزة الخبر)**: قفزة مفاجئة 30-60 نقطة مع اتساع الفارق السعري (Spread).
+- **الذروة (5-30 دقيقة)**: استمرار الاتجاه أو الانعكاس الوهمي. أفضل نافذة دخول على إطار 5 دقائق في TradingView أو MT5.
+- **الاستقرار (1-4 ساعات)**: التماسك بعد الخبر حول خط الفوليم VWAP أو مستويات الدعم والمقاومة.
 
-## 🧠 قائمة تخطيط الصفقة
-- [ ] قبل الحدث: حدد المستويات المهمة (دعم/مقاومة)
-- [ ] منطق الدخول: [قاعدة محددة]
-- [ ] الوقف: [مكانه]
-- [ ] الهدف: [نسبة الربح أو مستوى]
-- [ ] تجنب الصفقة إذا: [الشرط]
+## 🧠 قائمة تنفيذ الصفقة
+- [ ] **إعداد الرسم البياني**: حدد مستويات الدعم والمقاومة الرئيسية على إطار 1 ساعة في **TradingView** أو **MetaTrader 5**.
+- [ ] **استراتيجية الأخبار**: انتظر إغلاق شمعة 5 دقائق بعد الخبر قبل الدخول (لتجنب الانزلاق السعري Instant Spike).
+- [ ] **إدارة المخاطر**: ضع أمر وقف الخسارة على بعد 15-20 نقطة خارج ذيل شمعة الخبر. مخاطرة لا تتجاوز 1-2% من الحساب.
+- [ ] **أدوات التنفيذ**: استخدم أوامر OCO المعلقة (One-Cancels-the-Other) أو الأوامر المحددة على منصة MT5.`
 
-استخدم الجداول والنقاط والتنسيق العريض. بدون حشو. علّم كخبير يعرض على متداول مبتدئ، وأجب مباشرة دون أسئلة.`
-
-/** Pick the system prompt based on language. */
 function getSystemPrompt(lang) {
   return lang === 'ar' ? SYSTEM_PROMPT_AR : SYSTEM_PROMPT_EN
 }
 
-/** Analyze an economic event: expected market effect, affected assets, key levels, trading approach. */
 export async function analyzeEvent(event, lang = 'en') {
   const prompt = lang === 'ar'
-    ? `حلل هذا الحدث الاقتصادي لمتداول مبتدئ:
+    ? `حلل هذا الحدث الاقتصادي بشكل عميق ومباشر لمتداول:
 
 الحدث: ${event.title}
 العملة: ${event.currency}
@@ -354,8 +315,8 @@ export async function analyzeEvent(event, lang = 'en') {
 السابق: ${event.previous || 'غير متوفر'}
 الوصف: ${event.description || ''}
 
-استخدم الهيكل المحدد في تعليمات النظام تماماً.`
-    : `Analyze this economic event for a trader learner:
+اذكر أسماء الأدوات والمنصات المحددة بالاسم (مثل TradingView, MetaTrader 5, Bloomberg) وأزواج العملات المحددة (مثل EUR/USD, USD/JPY, XAU/USD) وأرقام النقاط المتوقعة دون تكرار أو عبارات عامة.`
+    : `Analyze this economic event with high-level professional detail for a trader:
 
 Event: ${event.title}
 Currency: ${event.currency}
@@ -365,82 +326,66 @@ Forecast: ${event.forecast || 'n/a'}
 Previous: ${event.previous || 'n/a'}
 Description: ${event.description || ''}
 
-Use the exact output format specified in your system prompt.`
-  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang })
+Always state exact tool names (e.g. TradingView, MetaTrader 5, Bloomberg), specific currency pairs/assets (e.g. EUR/USD, USD/JPY, Gold XAU/USD), and precise pip targets without any vague generalities.`
+  return callNVIDIA(prompt, undefined, { max_tokens: 1200, lang })
 }
 
-/** "What would happen if X" — simulate a scenario. */
 export async function simulateScenario(event, scenario, lang = 'en') {
   const prompt = lang === 'ar'
     ? `الحدث الاقتصادي: ${event.title} (${event.currency}، أهمية ${event.impact})
 التوقع: ${event.forecast}. السابق: ${event.previous}.
-الوصف: ${event.description || ''}
 
-السيناريو: "${scenario}"
+السيناريو المحاكى: "${scenario}"
 
-اشرح ما قد يحدث في السوق لو وقع هذا السيناريو.
-استخدم نفس تنسيق الماركداون المنظم الخاص بـ analyzeEvent.`
+اذكر بالتفصيل ما سيحدث في السوق لو تحقق هذا السيناريو. اذكر أزواج محددة بالاسم (مثل EUR/USD, USD/JPY, XAU/USD) ومنصات تحليل محددة (مثل TradingView, MetaTrader 5) واستراتيجية تداول واضحة.`
     : `Economic event: ${event.title} (${event.currency}, ${event.impact} impact)
 Forecast: ${event.forecast}. Previous: ${event.previous}.
-Description: ${event.description || ''}
 
-User scenario: "${scenario}"
+Simulated Scenario: "${scenario}"
 
-Walk through what would likely happen in the market if this scenario occurred.
-Use the same structured markdown format as analyzeEvent.`
-  return callNVIDIA(prompt, undefined, { max_tokens: 800, lang })
+Explain in realistic detail what happens to specific market instruments (e.g., EUR/USD, USD/JPY, Gold XAU/USD, S&P 500). Name actual platforms like TradingView or MetaTrader 5 and concrete pip movements.`
+  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang })
 }
 
-/* Explain a concept in simple trading terms — freely, shaped by the user's prompt. */
 export async function explainConcept(topic, lang = 'en') {
   const prompt = lang === 'ar'
-    ? `أجب على سؤال/طلب المستخدم التداولي بحرية وكما يناسبه، دون قالب ثابت:
+    ? `أجب على سؤال/طلب المستخدم التداولي بشكل عميق وعملي ومباشر:
 
 "${topic}"
 
-كن معلماً ودّياً للمبتدئين. اجعل الإجابة مناسبة لما طلبه المستخدم تماماً — إن كان سؤالاً مباشراً فأجب عليه مباشرة، وإن طلب شرحاً مفصلاً فافصّل، وإن أراد مثالاً فاضرب مثالاً. استخدم الماركداون (عناوين، نقاط، جداول، تنسيق عريض) فقط عندما يحسّن الوضوح. أجب بالعربية.`
-    : `Answer the user's trading question/request freely and exactly as it suits the prompt — no fixed template:
+كن معلماً خبيراً. اذكر أمثلة واقعية، منصات محددة بالاسم (مثل TradingView, MetaTrader 5, Bloomberg Terminal, ForexFactory)، أزواج عملات صريحة، واستراتيجيات قابلة للتطبيق. لا تستخدم أبداً عبارات مبهمة مثل "برامج تحليليـة" دون ذكر أسمائها!`
+    : `Answer the user's trading question/request with high-level practical depth:
 
 "${topic}"
 
-Be a friendly mentor for beginners. Shape the answer precisely to what the user asked — if it's a direct question, answer directly; if they want detail, go deep; if they want an example, give one. Use markdown (headings, bullets, tables, bold) only where it improves clarity.`
-  return callNVIDIA(prompt, undefined, { max_tokens: 700, lang })
+Be an expert mentor. Provide real-world examples, name specific software/platforms (e.g., TradingView, MetaTrader 5, Bloomberg Terminal, ForexFactory, Finviz), specific currency pairs, and actionable strategies. Never use vague phrases like "analysis programs" without naming the actual software!`
+  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang })
 }
 
-/** Follow-up chat with role guard — maintains context from previous AI response. */
 export async function followUpChat(context, question, lang = 'en') {
-  // context: { type: 'analysis'|'simulation'|'concept', event?: object, previousResponse: string }
   const isArabic = lang === 'ar'
   
   const rolePrompt = isArabic
-    ? `أنت MarketScope — مساعد تداول متخصص. دورك الوحيد: شرح الأحداث الاقتصادية، تحليل أثر السوق، وتعليم مفاهيم التداول.
-لا تجب عن أي سؤال خارج هذا النطاق. إذا سأل المستخدم شيئاً لا علاقة له (سياسة، طبخ، تقنية، شؤون شخصية، إلخ)، أجب بعبارة واحدة بلغة المستخدم:
-"أنا مساعد تداول متخصص. لا يمكنني الإجابة عن هذا الموضوع — اسألني عن أحداث اقتصادية، تحليل سوق، أو مفاهيم تداول."`
-    : `You are MarketScope — a specialized trading mentor. Your ONLY role: explain economic events, analyze market effects, and teach trading concepts.
-Do NOT answer anything outside this scope. If the user asks something unrelated (politics, cooking, tech support, personal advice, etc.), respond with ONE sentence in their language:
-"I'm a specialized trading assistant. I can't answer that — ask me about economic events, market analysis, or trading concepts."`
+    ? `أنت MarketScope — مساعد تداول متخصص. دورك: تقديم إجابات دقيقة وعميقة ومباشرة حول الأحداث الاقتصادية، تحليل أثر السوق، واستراتيجيات التداول.
+اذكر دائماً أسماء برامج ومنصات حقيقية (TradingView, MetaTrader 5, Bloomberg) وأزواج عملات صريحة (EUR/USD, USD/JPY, XAU/USD).`
+    : `You are MarketScope — an expert trading analyst and mentor.
+Provide direct, deep, actionable answers. Always name exact software (TradingView, MetaTrader 5, Bloomberg) and specific financial assets (EUR/USD, USD/JPY, Gold XAU/USD).`
 
   const contextStr = context.type === 'analysis' && context.event
-    ? `Previous analysis was for: ${context.event.title} (${context.event.currency}, ${context.event.impact} impact).\nPrevious response:\n${context.previousResponse}`
-    : context.type === 'simulation' && context.event
-      ? `Previous simulation was for: ${context.event.title} (${context.event.currency}). Scenario: "${context.scenario}".\nPrevious response:\n${context.previousResponse}`
-      : context.type === 'concept'
-        ? `Previous concept explained: "${context.topic}".\nPrevious response:\n${context.previousResponse}`
-        : `Previous response:\n${context.previousResponse}`
+    ? `Previous analysis for: ${context.event.title} (${context.event.currency}).\nPrevious AI response summary:\n${context.previousResponse}`
+    : `Previous AI response:\n${context.previousResponse}`
 
   const prompt = `${rolePrompt}
 
----
 CONTEXT:
 ${contextStr}
 
----
-USER FOLLOW-UP:
+USER FOLLOW-UP QUESTION:
 ${question}
 
-Answer the follow-up concisely. Stay in your role.`
+Answer the follow-up with concrete, specific trading details. Name specific tools and assets.`
 
-  return callNVIDIA(prompt, undefined, { max_tokens: 600, lang })
+  return callNVIDIA(prompt, undefined, { max_tokens: 800, lang })
 }
 
 export default { analyzeEvent, simulateScenario, explainConcept, followUpChat, fetchLiveCalendar, DEFAULT_CALENDAR }
