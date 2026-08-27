@@ -43,7 +43,6 @@ function fetchXmlFromUpstream() {
           saveCachedXml(data)
           resolve(data)
         } else {
-          // If rate limited, use stale cache if available
           const stale = getCachedXml()
           if (stale) resolve(stale)
           else reject(new Error('Rate limited and no cache available'))
@@ -54,26 +53,22 @@ function fetchXmlFromUpstream() {
   })
 }
 
-function calendarMiddleware() {
+function devMiddlewares() {
   return {
-    name: 'calendar-middleware',
+    name: 'dev-middlewares',
     configureServer(server) {
+      // Calendar endpoint proxy
       server.middlewares.use('/api/calendar', async (req, res) => {
         res.setHeader('Content-Type', 'application/xml; charset=utf-8')
         res.setHeader('Access-Control-Allow-Origin', '*')
         
-        // 1. Try fresh cache
         const cached = getCachedXml()
-        if (cached) {
-          return res.end(cached)
-        }
+        if (cached) return res.end(cached)
         
-        // 2. Fetch upstream
         try {
           const xml = await fetchXmlFromUpstream()
           res.end(xml)
-        } catch (err) {
-          // 3. Fallback to stale cache or empty XML
+        } catch {
           const stale = getCachedXml()
           if (stale) res.end(stale)
           else {
@@ -82,12 +77,60 @@ function calendarMiddleware() {
           }
         }
       })
+
+      // AI endpoint proxy (for testing production mode locally)
+      server.middlewares.use('/api/ai', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          return res.end('Method Not Allowed')
+        }
+
+        let bodyStr = ''
+        req.on('data', chunk => bodyStr += chunk)
+        req.on('end', () => {
+          try {
+            const body = JSON.parse(bodyStr || '{}')
+            const apiKey = process.env.VITE_NVIDIA_API_KEY || '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'
+            const payload = JSON.stringify({
+              model: body.model || 'meta/llama-3.2-11b-vision-instruct',
+              messages: body.messages,
+              max_tokens: body.max_tokens || 2048,
+              temperature: body.temperature || 0.6,
+              stream: true
+            })
+
+            const proxyReq = https.request('https://integrate.api.nvidia.com/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Length': Buffer.byteLength(payload)
+              }
+            }, (proxyRes) => {
+              res.statusCode = proxyRes.statusCode
+              res.setHeader('Content-Type', 'text/event-stream')
+              proxyRes.pipe(res)
+            })
+
+            proxyReq.on('error', (err) => {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: err.message }))
+            })
+
+            proxyReq.write(payload)
+            proxyReq.end()
+          } catch (err) {
+            res.statusCode = 400
+            res.end(JSON.stringify({ error: err.message }))
+          }
+        })
+      })
     }
   }
 }
 
 export default defineConfig({
-  plugins: [react(), calendarMiddleware()],
+  plugins: [react(), devMiddlewares()],
   root: '.',
   publicDir: 'public',
   build: { outDir: 'dist' },

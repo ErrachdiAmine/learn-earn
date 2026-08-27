@@ -188,15 +188,24 @@ export const DEFAULT_CALENDAR = [
 ].sort((a, b) => new Date(a.date) - new Date(b.date))
 
 /* ---------- AI CALL (streaming SSE parsing) ---------- */
-export async function callNVIDIA(prompt, config = getModelConfig(), { temperature = 0.6, max_tokens = 2048, lang = 'en' } = {}) {
-  if (!API_KEY) throw new Error('AI key not configured. Set VITE_NVIDIA_API_KEY in .env')
-  const baseUrl = API_BASE || config.baseUrl
-  
+export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.6, max_tokens = 2048, lang = 'en' } = {}) {
+  const config = customConfig || getModelConfig()
+  const isLocalOmniRoute = config.baseUrl.includes('localhost') || config.baseUrl.includes('127.0.0.1')
+
+  const targetUrl = isLocalOmniRoute 
+    ? `${config.baseUrl}/chat/completions` 
+    : '/api/ai'
+
   // Helper to call the API and parse SSE
   async function makeCall(msgs, tokens) {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const headers = { 'Content-Type': 'application/json' }
+    if (isLocalOmniRoute) {
+      headers['Authorization'] = `Bearer ${config.apiKey}`
+    }
+
+    const res = await fetch(targetUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+      headers,
       body: JSON.stringify({
         model: config.model,
         messages: msgs,
