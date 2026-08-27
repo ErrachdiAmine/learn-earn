@@ -300,7 +300,9 @@ function Logo() {
 
 /* ================= SIDE PANEL ================= */
 function SidePanel({ open, onClose, lang, setLang, dark, setDark, modelName }) {
-  const t = T[lang]
+  const themeNameEn = dark ? 'Obsidian Dark' : 'Slate Light'
+  const themeNameAr = dark ? 'داكن (أوبسيديان)' : 'فاتح (سلايت)'
+
   return (
     <>
       <div className={`panel-overlay ${open ? 'open' : ''}`} onClick={onClose} />
@@ -321,12 +323,18 @@ function SidePanel({ open, onClose, lang, setLang, dark, setDark, modelName }) {
 
         <div className="panel-section">
           <div className="panel-row" onClick={() => setDark(d => !d)}>
-            <span>{lang === 'ar' ? 'المظهر' : 'Theme'}</span>
+            <div className="panel-row-info">
+              <span className="panel-row-label">{lang === 'ar' ? 'نمط المظهر' : 'Active Theme'}</span>
+              <span className="panel-value">{lang === 'ar' ? themeNameAr : themeNameEn}</span>
+            </div>
             <span className={`toggle ${dark ? 'on' : ''}`}><span className="knob" /></span>
           </div>
           <div className="panel-row" onClick={() => setLang(l => l === 'en' ? 'ar' : 'en')}>
-            <span>{lang === 'ar' ? 'اللغة' : 'Language'}</span>
-            <span className="panel-value">{lang === 'ar' ? 'English' : 'العربية'}</span>
+            <div className="panel-row-info">
+              <span className="panel-row-label">{lang === 'ar' ? 'اللغة' : 'Language'}</span>
+              <span className="panel-value">{lang === 'ar' ? 'العربية (Arabic)' : 'English'}</span>
+            </div>
+            <span className="panel-chip-btn">{lang === 'ar' ? 'EN' : 'AR'}</span>
           </div>
         </div>
 
