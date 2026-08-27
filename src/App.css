@@ -212,12 +212,21 @@ body {
 .btn-danger:hover { background: rgba(244, 63, 94, 0.22); }
 .btn.sm { padding: 6px 12px; font-size: 12px; }
 
+/* Background Scroll Locking when Modals/Sheets are Open */
+body.modal-open {
+  overflow: hidden !important;
+  touch-action: none !important;
+  overscroll-behavior: none !important;
+}
+
 /* ===== Sheet ===== */
 .sheet-overlay {
   position: fixed; inset: 0; z-index: 200;
   background: rgba(0, 0, 0, 0.7);
   display: flex; align-items: flex-end; justify-content: center;
   animation: fade 0.15s ease-out;
+  overscroll-behavior: contain;
+  touch-action: none;
 }
 .sheet {
   background: var(--card-bg); color: var(--text);
@@ -229,6 +238,8 @@ body {
   padding: 12px 18px 24px;
   box-shadow: var(--shadow-lg);
   animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 .sheet-handle {

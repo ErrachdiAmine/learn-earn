@@ -116,6 +116,28 @@ export default function App() {
   }, [dark])
   useEffect(() => { localStorage.setItem('marketscope-journal', JSON.stringify(journal)) }, [journal])
 
+  // Lock background scroll on mobile and desktop when event details or side panel is open
+  useEffect(() => {
+    const isModalOpen = Boolean(selectedEvent || panelOpen)
+    if (isModalOpen) {
+      document.body.style.overflow = 'hidden'
+      document.body.style.touchAction = 'none'
+      document.documentElement.style.overflow = 'hidden'
+      document.body.classList.add('modal-open')
+    } else {
+      document.body.style.overflow = ''
+      document.body.style.touchAction = ''
+      document.documentElement.style.overflow = ''
+      document.body.classList.remove('modal-open')
+    }
+    return () => {
+      document.body.style.overflow = ''
+      document.body.style.touchAction = ''
+      document.documentElement.style.overflow = ''
+      document.body.classList.remove('modal-open')
+    }
+  }, [selectedEvent, panelOpen])
+
   /* ------- actions ------- */
   const openEvent = (ev) => {
     setSelectedEvent(ev)
