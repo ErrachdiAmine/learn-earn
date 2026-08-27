@@ -54,9 +54,14 @@ const loadJournal = () => {
   try { return JSON.parse(localStorage.getItem('marketscope-journal') || '[]') } catch { return [] }
 }
 
-/* Dark mode seed */
+/* Dark mode seed - default to dark theme */
 const initialDark = () => {
-  try { return localStorage.getItem('marketscope-dark') === 'true' } catch { return true }
+  try {
+    const val = localStorage.getItem('marketscope-dark')
+    return val === null ? true : val === 'true'
+  } catch {
+    return true
+  }
 }
 
 export default function App() {
