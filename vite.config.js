@@ -108,7 +108,10 @@ function devMiddlewares() {
               }
             }, (proxyRes) => {
               res.statusCode = proxyRes.statusCode
-              res.setHeader('Content-Type', 'text/event-stream')
+              res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+              res.setHeader('Cache-Control', 'no-cache, no-transform')
+              res.setHeader('Connection', 'keep-alive')
+              res.setHeader('X-Accel-Buffering', 'no')
               proxyRes.pipe(res)
             })
 

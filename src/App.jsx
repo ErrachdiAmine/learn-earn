@@ -12,6 +12,49 @@ const impactMeta = {
 const impactMetaAr = { high: 'عالي', med: 'متوسط', low: 'منخفض' }
 const currencyFlag = { USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', COM: '🛢️', JPY: '🇯🇵', AUD: '🇦🇺', CAD: '🇨🇦' }
 
+function SmoothMarkdown({ text }) {
+  const [displayed, setDisplayed] = useState('')
+  const targetRef = useRef('')
+  const intervalRef = useRef(null)
+
+  useEffect(() => {
+    targetRef.current = text || ''
+    if (!text) {
+      setDisplayed('')
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      intervalRef.current = null
+      return
+    }
+
+    if (!intervalRef.current) {
+      intervalRef.current = setInterval(() => {
+        setDisplayed(prev => {
+          const target = targetRef.current
+          if (prev.length >= target.length) {
+            clearInterval(intervalRef.current)
+            intervalRef.current = null
+            return target
+          }
+          const diff = target.length - prev.length
+          // Dynamic typing step: 2 to 6 characters per tick (12ms) for smooth reading flow
+          const step = Math.min(diff, Math.max(2, Math.floor(diff / 6)))
+          return target.slice(0, prev.length + step)
+        })
+      }, 12)
+    }
+  }, [text])
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [])
+
+  if (!displayed) return null
+
+  return <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(displayed) }} />
+}
+
 /* Translation strings for EN / AR */
 const T = {
   en: {
@@ -380,7 +423,7 @@ function FollowUpChat({ context, lang }) {
         <div key={i} className={`msg ${msg.role}`}>
           <div className="msg-bubble">
             {msg.role === 'assistant' ? (
-              <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) }} />
+              <SmoothMarkdown text={msg.content} />
             ) : (
               <p>{msg.content}</p>
             )}
@@ -448,7 +491,7 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
         {analyzing && !analysis && <div className="loader">{t.thinking} <i /></div>}
         {analysis && (
           <div className="ai-result">
-            <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(analysis) }} />
+            <SmoothMarkdown text={analysis} />
             <FollowUpChat
               context={{ type: 'analysis', event, previousResponse: analysis }}
               lang={lang}
@@ -468,7 +511,7 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
           {scenarioLoading && !scenarioRes && <div className="loader">{t.simulating} <i /></div>}
           {scenarioRes && (
             <div className="ai-result">
-              <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(scenarioRes) }} />
+              <SmoothMarkdown text={scenarioRes} />
               <FollowUpChat
                 context={{ type: 'simulation', event, scenario, previousResponse: scenarioRes }}
                 lang={lang}
@@ -557,7 +600,7 @@ function LearnView({ explainConcept, addJournalEntry, lang }) {
       {loading && !res && <div className="loader">{t.teaching} <i /></div>}
       {res && (
         <div className="ai-result">
-          <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(res) }} />
+          <SmoothMarkdown text={res} />
           <FollowUpChat context={{ type: 'concept', topic, previousResponse: res }} lang={lang} />
         </div>
       )}
