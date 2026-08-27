@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model || 'meta/llama-3.2-11b-vision-instruct',
+        model: model || 'nvidia/nemotron-3-nano-30b-a3b',
         messages,
         temperature: temperature || 0.6,
         max_tokens: max_tokens || 2048,

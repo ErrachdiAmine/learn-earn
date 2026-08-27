@@ -10,7 +10,7 @@ const DEV_API_KEY = 'sk-89d7096638aec30b-b456e4-ddf6ec7c'
 
 // NVIDIA NIM Cloud defaults (for production deployment)
 const PROD_BASE_URL = 'https://integrate.api.nvidia.com/v1'
-const PROD_MODEL = 'meta/llama-3.2-11b-vision-instruct'
+const PROD_MODEL = 'nvidia/nemotron-3-nano-30b-a3b'
 const PROD_API_KEY = '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'
 
 export const modelConfig = {
