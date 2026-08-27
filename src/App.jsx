@@ -115,9 +115,9 @@ export default function App() {
 
   const runAnalysis = async () => {
     if (!selectedEvent) return
-    setAnalyzing(true); setAiError(null); setAnalysis(null)
+    setAnalyzing(true); setAiError(null); setAnalysis('')
     try {
-      const res = await analyzeEvent(selectedEvent, lang)
+      const res = await analyzeEvent(selectedEvent, lang, (chunk) => setAnalysis(chunk))
       setAnalysis(res)
     } catch (e) {
       setAiError(e.message)
@@ -126,9 +126,9 @@ export default function App() {
 
   const runScenario = async () => {
     if (!selectedEvent || !scenario.trim()) return
-    setScenarioLoading(true); setScenarioRes(null); setAiError(null)
+    setScenarioLoading(true); setScenarioRes(''); setAiError(null)
     try {
-      const res = await simulateScenario(selectedEvent, scenario, lang)
+      const res = await simulateScenario(selectedEvent, scenario, lang, (chunk) => setScenarioRes(chunk))
       setScenarioRes(res)
     } catch (e) { setAiError(e.message) }
     finally { setScenarioLoading(false) }
@@ -344,14 +344,29 @@ function FollowUpChat({ context, lang }) {
   const send = async () => {
     const q = input.trim()
     if (!q || loading) return
-    setMessages(prev => [...prev, { role: 'user', content: q }])
+    const userMsg = { role: 'user', content: q }
+    const assistantIndex = messages.length + 1
+    setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '...' }])
     setInput('')
     setLoading(true)
     try {
-      const answer = await followUpChat(context, q, lang)
-      setMessages(prev => [...prev, { role: 'assistant', content: answer }])
+      await followUpChat(context, q, lang, (chunk) => {
+        setMessages(prev => {
+          const updated = [...prev]
+          if (updated.length > 0) {
+            updated[updated.length - 1] = { role: 'assistant', content: chunk }
+          }
+          return updated
+        })
+      })
     } catch (e) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${e.message}` }])
+      setMessages(prev => {
+        const updated = [...prev]
+        if (updated.length > 0) {
+          updated[updated.length - 1] = { role: 'assistant', content: `⚠️ ${e.message}` }
+        }
+        return updated
+      })
     } finally {
       setLoading(false)
     }
@@ -430,7 +445,7 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
           {analyzing ? t.analyzing : (analysis ? t.reanalyze : t.analyzeBtn)}
         </button>
         {aiError && <p className="error">{aiError}</p>}
-        {analyzing && <div className="loader">{t.thinking} <i /></div>}
+        {analyzing && !analysis && <div className="loader">{t.thinking} <i /></div>}
         {analysis && (
           <div className="ai-result">
             <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(analysis) }} />
@@ -450,7 +465,7 @@ function EventSheet({ event, analysis, analyzing, aiError, scenario, setScenario
               placeholder={t.simPlaceholder} />
             <button className="btn btn-primary" onClick={onScenario} disabled={scenarioLoading || !scenario.trim()}>{scenarioLoading ? '…' : t.run}</button>
           </div>
-          {scenarioLoading && <div className="loader">{t.simulating} <i /></div>}
+          {scenarioLoading && !scenarioRes && <div className="loader">{t.simulating} <i /></div>}
           {scenarioRes && (
             <div className="ai-result">
               <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(scenarioRes) }} />
@@ -508,8 +523,11 @@ function LearnView({ explainConcept, addJournalEntry, lang }) {
   const run = async (q) => {
     const query = q || topic
     if (!query.trim()) return
-    setLoading(true); setError(null); setRes(null)
-    try { setRes(await explainConcept(query, lang)) }
+    setLoading(true); setError(null); setRes('')
+    try {
+      const resText = await explainConcept(query, lang, (chunk) => setRes(chunk))
+      setRes(resText)
+    }
     catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }
@@ -536,7 +554,7 @@ function LearnView({ explainConcept, addJournalEntry, lang }) {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {loading && <div className="loader">{t.teaching} <i /></div>}
+      {loading && !res && <div className="loader">{t.teaching} <i /></div>}
       {res && (
         <div className="ai-result">
           <div className="markdown" dangerouslySetInnerHTML={{ __html: marked.parse(res) }} />

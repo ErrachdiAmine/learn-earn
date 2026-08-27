@@ -138,8 +138,8 @@ export const DEFAULT_CALENDAR = [
 
 import { getModelConfig } from '../config/model'
 
-/* ---------- AI CALL (streaming SSE parsing) ---------- */
-export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.6, max_tokens = 2048, lang = 'en' } = {}) {
+/* ---------- AI CALL (Real-Time Token Streaming) ---------- */
+export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.6, max_tokens = 2048, lang = 'en', onChunk = null } = {}) {
   const config = customConfig || getModelConfig()
   const isLocalOmniRoute = config.baseUrl.includes('localhost') || config.baseUrl.includes('127.0.0.1')
 
@@ -147,7 +147,7 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     ? `${config.baseUrl}/chat/completions` 
     : '/api/ai'
 
-  async function makeCall(msgs, tokens) {
+  async function makeCall(msgs, tokens, chunkCb) {
     const headers = { 'Content-Type': 'application/json' }
     if (isLocalOmniRoute) {
       headers['Authorization'] = `Bearer ${config.apiKey}`
@@ -170,9 +170,57 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
       throw new Error(`API Error: ${err.error?.message || res.statusText}`)
     }
 
+    let accumulated = ''
+
+    // 1. Try real-time stream reader if available
+    if (res.body && res.body.getReader) {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const payload = trimmed.slice(5).trim()
+          if (payload === '[DONE]') continue
+          try {
+            const json = JSON.parse(payload)
+            const delta = json.choices?.[0]?.delta
+            if (delta?.content) {
+              accumulated += delta.content
+              if (chunkCb) chunkCb(accumulated)
+            }
+          } catch { /* ignore non-JSON */ }
+        }
+      }
+
+      if (buffer.trim().startsWith('data:')) {
+        const payload = buffer.trim().slice(5).trim()
+        if (payload !== '[DONE]') {
+          try {
+            const json = JSON.parse(payload)
+            const delta = json.choices?.[0]?.delta
+            if (delta?.content) {
+              accumulated += delta.content
+              if (chunkCb) chunkCb(accumulated)
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      if (accumulated.trim()) return accumulated.trim()
+    }
+
+    // 2. Fallback for environments where body.getReader is unavailable
     const text = await res.text()
     if (text.includes('data:')) {
-      let content = ''
       for (const line of text.split('\n')) {
         const trimmed = line.trim()
         if (!trimmed.startsWith('data:')) continue
@@ -181,15 +229,21 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
         try {
           const json = JSON.parse(payload)
           const delta = json.choices?.[0]?.delta
-          if (delta?.content) content += delta.content
-        } catch { /* ignore keep-alive / non-JSON lines */ }
+          if (delta?.content) {
+            accumulated += delta.content
+            if (chunkCb) chunkCb(accumulated)
+          }
+        } catch { /* ignore */ }
       }
-      return content.trim()
+      return accumulated.trim()
     }
     try {
       const data = JSON.parse(text)
-      return data.choices?.[0]?.message?.content || ''
+      const content = data.choices?.[0]?.message?.content || ''
+      if (chunkCb) chunkCb(content)
+      return content
     } catch {
+      if (chunkCb) chunkCb(text.trim())
       return text.trim()
     }
   }
@@ -198,7 +252,7 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
     { role: 'system', content: getSystemPrompt(lang) },
     { role: 'user', content: prompt }
   ]
-  let full = await makeCall(msgs, max_tokens)
+  let full = await makeCall(msgs, max_tokens, onChunk)
 
   const needsContinue = full.length > 100 && !/[.!?]\s*$/.test(full.trim()) && !full.includes('[DONE]')
   if (needsContinue) {
@@ -209,7 +263,10 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
         { role: 'assistant', content: full },
         { role: 'user', content: lang === 'ar' ? 'أكمل الإجابة من حيث توقفت بدون تكرار.' : 'Continue from where you left off without repeating.' }
       ]
-      const more = await makeCall(contMsgs, 1024)
+      let continuedText = full
+      const more = await makeCall(contMsgs, 1024, (newPart) => {
+        if (onChunk) onChunk(continuedText + '\n\n' + newPart)
+      })
       if (more) full += '\n\n' + more
     } catch { /* ignore continuation failures */ }
   }
@@ -303,7 +360,7 @@ function getSystemPrompt(lang) {
   return lang === 'ar' ? SYSTEM_PROMPT_AR : SYSTEM_PROMPT_EN
 }
 
-export async function analyzeEvent(event, lang = 'en') {
+export async function analyzeEvent(event, lang = 'en', onChunk = null) {
   const prompt = lang === 'ar'
     ? `حلل هذا الحدث الاقتصادي بشكل عميق ومباشر لمتداول:
 
@@ -327,10 +384,10 @@ Previous: ${event.previous || 'n/a'}
 Description: ${event.description || ''}
 
 Always state exact tool names (e.g. TradingView, MetaTrader 5, Bloomberg), specific currency pairs/assets (e.g. EUR/USD, USD/JPY, Gold XAU/USD), and precise pip targets without any vague generalities.`
-  return callNVIDIA(prompt, undefined, { max_tokens: 1200, lang })
+  return callNVIDIA(prompt, undefined, { max_tokens: 1200, lang, onChunk })
 }
 
-export async function simulateScenario(event, scenario, lang = 'en') {
+export async function simulateScenario(event, scenario, lang = 'en', onChunk = null) {
   const prompt = lang === 'ar'
     ? `الحدث الاقتصادي: ${event.title} (${event.currency}، أهمية ${event.impact})
 التوقع: ${event.forecast}. السابق: ${event.previous}.
@@ -344,10 +401,10 @@ Forecast: ${event.forecast}. Previous: ${event.previous}.
 Simulated Scenario: "${scenario}"
 
 Explain in realistic detail what happens to specific market instruments (e.g., EUR/USD, USD/JPY, Gold XAU/USD, S&P 500). Name actual platforms like TradingView or MetaTrader 5 and concrete pip movements.`
-  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang })
+  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang, onChunk })
 }
 
-export async function explainConcept(topic, lang = 'en') {
+export async function explainConcept(topic, lang = 'en', onChunk = null) {
   const prompt = lang === 'ar'
     ? `أجب على سؤال/طلب المستخدم التداولي بشكل عميق وعملي ومباشر:
 
@@ -359,10 +416,10 @@ export async function explainConcept(topic, lang = 'en') {
 "${topic}"
 
 Be an expert mentor. Provide real-world examples, name specific software/platforms (e.g., TradingView, MetaTrader 5, Bloomberg Terminal, ForexFactory, Finviz), specific currency pairs, and actionable strategies. Never use vague phrases like "analysis programs" without naming the actual software!`
-  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang })
+  return callNVIDIA(prompt, undefined, { max_tokens: 1000, lang, onChunk })
 }
 
-export async function followUpChat(context, question, lang = 'en') {
+export async function followUpChat(context, question, lang = 'en', onChunk = null) {
   const isArabic = lang === 'ar'
   
   const rolePrompt = isArabic
@@ -385,7 +442,7 @@ ${question}
 
 Answer the follow-up with concrete, specific trading details. Name specific tools and assets.`
 
-  return callNVIDIA(prompt, undefined, { max_tokens: 800, lang })
+  return callNVIDIA(prompt, undefined, { max_tokens: 800, lang, onChunk })
 }
 
 export default { analyzeEvent, simulateScenario, explainConcept, followUpChat, fetchLiveCalendar, DEFAULT_CALENDAR }
