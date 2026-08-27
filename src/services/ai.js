@@ -178,44 +178,48 @@ export async function callNVIDIA(prompt, customConfig = null, { temperature = 0.
       const decoder = new TextDecoder()
       let buffer = ''
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
 
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith('data:')) continue
-          const payload = trimmed.slice(5).trim()
-          if (payload === '[DONE]') continue
-          try {
-            const json = JSON.parse(payload)
-            const delta = json.choices?.[0]?.delta
-            if (delta?.content) {
-              accumulated += delta.content
-              if (chunkCb) chunkCb(accumulated)
-            }
-          } catch { /* ignore non-JSON */ }
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            const payload = trimmed.slice(5).trim()
+            if (payload === '[DONE]') continue
+            try {
+              const json = JSON.parse(payload)
+              const delta = json.choices?.[0]?.delta
+              if (delta?.content) {
+                accumulated += delta.content
+                if (chunkCb) chunkCb(accumulated)
+              }
+            } catch { /* ignore non-JSON */ }
+          }
         }
+
+        if (buffer.trim().startsWith('data:')) {
+          const payload = buffer.trim().slice(5).trim()
+          if (payload !== '[DONE]') {
+            try {
+              const json = JSON.parse(payload)
+              const delta = json.choices?.[0]?.delta
+              if (delta?.content) {
+                accumulated += delta.content
+                if (chunkCb) chunkCb(accumulated)
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      } catch (err) {
+        console.warn('Stream reading interrupted:', err)
       }
 
-      if (buffer.trim().startsWith('data:')) {
-        const payload = buffer.trim().slice(5).trim()
-        if (payload !== '[DONE]') {
-          try {
-            const json = JSON.parse(payload)
-            const delta = json.choices?.[0]?.delta
-            if (delta?.content) {
-              accumulated += delta.content
-              if (chunkCb) chunkCb(accumulated)
-            }
-          } catch { /* ignore */ }
-        }
-      }
-
-      if (accumulated.trim()) return accumulated.trim()
+      return accumulated.trim()
     }
 
     // 2. Fallback for environments where body.getReader is unavailable
